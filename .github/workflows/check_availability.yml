@@ -1,0 +1,56 @@
+name: 練馬区施設 空き状況チェック
+
+# ==============================================================
+# このファイルは「いつ・どうやって check_availability.py を実行するか」を
+# GitHubに指示するファイルです。中身を編集する必要は基本的にありません。
+# ==============================================================
+
+on:
+  schedule:
+    # 【日中〜夜】30分ごとに実行（JST 6:00〜24:00）
+    # UTCで書くとJSTの6:00は前日UTCの21:00にあたるため 21-23,0-14 時台になります
+    - cron: "0,30 21-23,0-14 * * *"
+    # 【深夜〜早朝】1時間ごとに実行（JST 0:00〜6:00）
+    # UTCで書くとJSTの0:00〜5:00はUTCの15:00〜20:00にあたります
+    - cron: "0 15-20 * * *"
+    # GitHub Actionsのスケジュールは「だいたいその時刻」であり、
+    # 混雑時は数分〜十数分ずれることがあります。ご了承ください。
+  workflow_dispatch:
+    # これがあると、GitHubの画面から「今すぐ手動で実行」できるようになります。
+    # 最初の動作確認はこの手動実行を使います。
+
+# 状態ファイル(state/availability.json)をリポジトリにコミットし直すため、
+# 書き込み権限を許可します。
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: Pythonをセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 必要なライブラリをインストール
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: 空き状況をチェック
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        run: python check_availability.py
+
+      - name: 状態ファイル・デバッグ画像を保存(コミット)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state debug
+          git diff --quiet --cached || git commit -m "空き状況チェック結果を更新 [skip ci]"
+          git push
