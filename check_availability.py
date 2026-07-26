@@ -44,7 +44,7 @@ FACILITIES = [
 ]
 
 # 今日から何か月分見るか
-MONTHS_AHEAD = 3
+MONTHS_AHEAD = 4
 
 # 「この時間帯だけしか空いていない場合は、空きなし扱いにする」時間帯
 # (開始時刻, 終了時刻) のタプルで指定。表記ゆれ（21:0 など）は正規化して比較します。
@@ -119,7 +119,7 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
 
     for attempt in range(1, 4):  # 最大3回まで試す
         page.goto(url, wait_until="networkidle", timeout=45000)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(3000)
 
         try:
             page.get_by_text("検索する", exact=True).click(timeout=10000)
@@ -128,17 +128,17 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
 
         # クリック直後は、データが届く前の「一時的な空表示」を
         # 「本当に空きがない」と誤判定してしまうことがあるため、
-        # ・最初の2秒は判定せずに待つ
+        # ・最初の4秒は判定せずに待つ
         # ・「見つかりませんでした」は連続2回(1秒以上)観測できてから確定する
         # ・カレンダー表が実際に描画されたら、その場で確定してよい
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(4000)
 
         body_text = ""
         facility_ok = False
         calendar_rendered = False
         no_result_streak = 0
         confirmed = False
-        for _ in range(20):  # 0.5秒 x 20回 = 最大10秒
+        for _ in range(20):  # 1秒 x 20回 = 最大20秒
             body_text = page.inner_text("body")
             facility_ok = facility_name in body_text
             try:
@@ -159,7 +159,7 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
                 confirmed = True
                 break
 
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(1000)
 
         if confirmed:
             break
