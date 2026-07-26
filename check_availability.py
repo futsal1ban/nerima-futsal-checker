@@ -155,6 +155,42 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
     with open(clickable_path, "w", encoding="utf-8") as f:
         json.dump(sorted(clickable_days), f, ensure_ascii=False)
 
+    # ★調査用★
+    # clickable_days が空だった場合、「予約申込可能」の文字を含む要素の
+    # 実際のHTML構造をファイルに保存しておく。これを見れば、
+    # どんなタグ・クラス名で空き日が作られているかが分かり、
+    # 検出ロジックを正確に直せるようになる。
+    if not clickable_days and "予約申込可能" in body_text:
+        html_debug_path = os.path.join(DEBUG_DIR, f"{debug_name}_html_sample.txt")
+        try:
+            samples = page.evaluate(
+                """
+                () => {
+                  const results = [];
+                  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                  let node;
+                  let count = 0;
+                  while ((node = walker.nextNode()) && count < 5) {
+                    if (node.textContent.includes('予約申込可能')) {
+                      let el = node.parentElement;
+                      // 少し上の階層(日付を含みそうな祖先)まで遡ってHTMLを取得
+                      let ancestor = el;
+                      for (let i = 0; i < 3 && ancestor.parentElement; i++) {
+                        ancestor = ancestor.parentElement;
+                      }
+                      results.push(ancestor.outerHTML);
+                      count++;
+                    }
+                  }
+                  return results;
+                }
+                """
+            )
+            with open(html_debug_path, "w", encoding="utf-8") as f:
+                f.write("\n\n===== 次のサンプル =====\n\n".join(samples))
+        except Exception as e:
+            print(f"[警告] HTML構造の調査保存に失敗しました: {e}")
+
     return body_text, clickable_days
 
 
