@@ -159,7 +159,7 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
                 confirmed = True
                 break
 
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(3000)
 
         if confirmed:
             break
