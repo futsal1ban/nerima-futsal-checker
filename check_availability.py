@@ -217,32 +217,37 @@ DATE_TOKEN_PATTERN = re.compile(
 
 def extract_clickable_days(page):
     """
-    ページ内の「クリックできそうな要素」(a, button, role=button) のうち、
-    「予約申込可能」という文字を含むものを探し、その中の日付(先頭の数字)を拾う。
-    （＝クリックすると空き時間が表示される日、という想定）
-
-    ※以前は「中身が数字だけの要素」を探していましたが、実際の画面では
-    「1
-予約申込可能」のように日付と状態が同じ要素にまとまって入っていたため、
-    検出できていませんでした。この形式に合わせて修正しています。
+    ページ内の各日付セル <td id="YYYY/MM/DD"> の中に
+    <span class="vacant">予約申込可能</span> があるかどうかを直接調べる。
+    （＝実際にDevToolsで確認していただいたHTML構造に基づく、確実な判定方法）
     """
     days = set()
     try:
-        candidates = page.locator("a, button, [role='button']")
-        count = candidates.count()
-    except Exception:
+        id_list = page.evaluate(
+            """
+            () => {
+              const out = [];
+              document.querySelectorAll('td[id]').forEach(td => {
+                if (td.querySelector('span.vacant')) {
+                  out.push(td.id);  // 例: "2026/07/26"
+                }
+              });
+              return out;
+            }
+            """
+        )
+    except Exception as e:
+        print(f"[警告] 空き日セルの検出に失敗しました: {e}")
         return days
 
-    for i in range(count):
-        try:
-            txt = candidates.nth(i).inner_text(timeout=1000).strip()
-        except Exception:
-            continue
-        if "予約申込可能" not in txt:
-            continue
-        m = re.match(r"^\s*([1-9]|[12]\d|3[01])\b", txt)
-        if m:
-            days.add(int(m.group(1)))
+    for id_str in id_list:
+        parts = id_str.split("/")
+        if len(parts) == 3:
+            try:
+                days.add(int(parts[2]))
+            except ValueError:
+                continue
+    return days
     return days
 
 
@@ -330,13 +335,28 @@ def refine_days_with_time_slot_filter(page, year: int, month: int, day_numbers):
       にフォールバックするので、見落としが増える方向の失敗になります。
     """
     result = {}
+    debug_html_saved = False
     for day in sorted(day_numbers):
+        date_id = f"{year}/{month:02d}/{day:02d}"
         try:
-            day_locator = page.get_by_text(str(day), exact=True).first
+            day_locator = page.locator(f'td[id="{date_id}"] span.vacant').first
             day_locator.click(timeout=5000)
             page.wait_for_timeout(1500)
 
             ranges = get_available_time_ranges(page)
+
+            # ★調査用★ 時間帯が1件も取れなかった場合、最初の1回だけ
+            # クリック後の画面全体のHTMLをデバッグ保存しておく（原因調査用）
+            if not ranges and not debug_html_saved:
+                debug_html_saved = True
+                try:
+                    html = page.evaluate("() => document.body.innerHTML")
+                    path = os.path.join(DEBUG_DIR, f"slot_detail_html_sample_{year}-{month:02d}-{day:02d}.txt")
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(html[:20000])  # 長すぎる場合に備えて先頭2万文字まで
+                except Exception as e:
+                    print(f"[警告] 時間帯詳細のHTML保存に失敗しました: {e}")
+
             remaining = [r for r in ranges if r not in EXCLUDED_TIME_SLOTS]
             result[day] = len(remaining) > 0 if ranges else True
 
