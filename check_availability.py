@@ -182,8 +182,13 @@ DATE_TOKEN_PATTERN = re.compile(
 def extract_clickable_days(page):
     """
     ページ内の「クリックできそうな要素」(a, button, role=button) のうち、
-    表示テキストが「1〜31の数字だけ」のものを探し、その日付の集合を返す。
+    「予約申込可能」という文字を含むものを探し、その中の日付(先頭の数字)を拾う。
     （＝クリックすると空き時間が表示される日、という想定）
+
+    ※以前は「中身が数字だけの要素」を探していましたが、実際の画面では
+    「1
+予約申込可能」のように日付と状態が同じ要素にまとまって入っていたため、
+    検出できていませんでした。この形式に合わせて修正しています。
     """
     days = set()
     try:
@@ -197,8 +202,11 @@ def extract_clickable_days(page):
             txt = candidates.nth(i).inner_text(timeout=1000).strip()
         except Exception:
             continue
-        if re.fullmatch(r"([1-9]|[12]\d|3[01])", txt):
-            days.add(int(txt))
+        if "予約申込可能" not in txt:
+            continue
+        m = re.match(r"^\s*([1-9]|[12]\d|3[01])\b", txt)
+        if m:
+            days.add(int(m.group(1)))
     return days
 
 
