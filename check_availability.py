@@ -126,25 +126,42 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
         except Exception as e:
             print(f"[警告] 「検索する」ボタンのクリックに失敗しました: {e}")
 
-        # クリック直後は「まだ結果が届いていない一瞬の状態」を拾ってしまうことがあるため、
-        # 一度だけ待つのではなく、最大10秒ほど、0.5秒おきに「結果が確定したか」を確認する。
+        # クリック直後は、データが届く前の「一時的な空表示」を
+        # 「本当に空きがない」と誤判定してしまうことがあるため、
+        # ・最初の2秒は判定せずに待つ
+        # ・「見つかりませんでした」は連続2回(1秒以上)観測できてから確定する
+        # ・カレンダー表が実際に描画されたら、その場で確定してよい
+        page.wait_for_timeout(2000)
+
         body_text = ""
         facility_ok = False
         calendar_rendered = False
-        no_result_message = False
+        no_result_streak = 0
+        confirmed = False
         for _ in range(20):  # 0.5秒 x 20回 = 最大10秒
-            page.wait_for_timeout(500)
             body_text = page.inner_text("body")
             facility_ok = facility_name in body_text
             try:
                 calendar_rendered = page.locator("#calendar table tbody tr").count() > 0
             except Exception:
                 calendar_rendered = False
-            no_result_message = "見つかりませんでした" in body_text
-            if facility_ok and (calendar_rendered or no_result_message):
+
+            if facility_ok and calendar_rendered:
+                confirmed = True
                 break
 
-        if facility_ok and (calendar_rendered or no_result_message):
+            if facility_ok and "見つかりませんでした" in body_text:
+                no_result_streak += 1
+            else:
+                no_result_streak = 0
+
+            if facility_ok and no_result_streak >= 2:
+                confirmed = True
+                break
+
+            page.wait_for_timeout(500)
+
+        if confirmed:
             break
 
         if not facility_ok:
