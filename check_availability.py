@@ -123,21 +123,42 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
 
         try:
             page.get_by_text("検索する", exact=True).click(timeout=10000)
-            page.wait_for_timeout(3000)
         except Exception as e:
             print(f"[警告] 「検索する」ボタンのクリックに失敗しました: {e}")
 
-        body_text = page.inner_text("body")
+        # クリック直後は「まだ結果が届いていない一瞬の状態」を拾ってしまうことがあるため、
+        # 一度だけ待つのではなく、最大10秒ほど、0.5秒おきに「結果が確定したか」を確認する。
+        body_text = ""
+        facility_ok = False
+        calendar_rendered = False
+        no_result_message = False
+        for _ in range(20):  # 0.5秒 x 20回 = 最大10秒
+            page.wait_for_timeout(500)
+            body_text = page.inner_text("body")
+            facility_ok = facility_name in body_text
+            try:
+                calendar_rendered = page.locator("#calendar table tbody tr").count() > 0
+            except Exception:
+                calendar_rendered = False
+            no_result_message = "見つかりませんでした" in body_text
+            if facility_ok and (calendar_rendered or no_result_message):
+                break
 
-        # 表示された「現在の検索条件」に、狙った施設名が含まれているか確認する
-        if facility_name in body_text:
+        if facility_ok and (calendar_rendered or no_result_message):
             break
-        print(
-            f"[警告] {attempt}回目: 期待した施設「{facility_name}」と異なる結果が"
-            f"表示されたため、ページを開き直します。"
-        )
+
+        if not facility_ok:
+            print(
+                f"[警告] {attempt}回目: 期待した施設「{facility_name}」と異なる結果が"
+                f"表示されたため、ページを開き直します。"
+            )
+        else:
+            print(
+                f"[警告] {attempt}回目: 10秒待ってもカレンダーの描画が確認できなかったため、"
+                f"ページを開き直します。"
+            )
     else:
-        print(f"[エラー] {facility_name} {year_month}: 3回試しても正しい施設の結果を取得できませんでした。")
+        print(f"[エラー] {facility_name} {year_month}: 3回試しても正しい結果を取得できませんでした。")
 
     os.makedirs(DEBUG_DIR, exist_ok=True)
     screenshot_path = os.path.join(DEBUG_DIR, f"{debug_name}.png")
