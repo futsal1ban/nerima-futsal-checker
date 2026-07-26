@@ -8,19 +8,29 @@ name: 練馬区施設 空き状況チェック
 on:
   schedule:
     # 【日中〜夜】30分ごとに実行（JST 6:00〜24:00）
-    # UTCで書くとJSTの6:00は前日UTCの21:00にあたるため 21-23,0-14 時台になります
-    - cron: "9,39 21-23,0-14 * * *"
+    # 毎時07分・37分に実行。GitHubは「毎時0分・30分」が最も混雑するため、
+    # あえてズラすことで遅延しにくくしています。
+    - cron: "7,37 6-23 * * *"
+      timezone: "Asia/Tokyo"
     # 【深夜〜早朝】1時間ごとに実行（JST 0:00〜6:00）
-    # UTCで書くとJSTの0:00〜5:00はUTCの15:00〜20:00にあたります
-    - cron: "9 15-20 * * *"
-    # GitHub Actionsのスケジュールは「だいたいその時刻」であり、
-    # 混雑時は数分〜十数分ずれることがあります。ご了承ください。
+    - cron: "7 0-5 * * *"
+      timezone: "Asia/Tokyo"
+    # 注意: GitHub Actionsのスケジュール実行は「ベストエフォート」であり、
+    # 公式にも「混雑時は遅延・まれにスキップされることがある」と明記されています。
+    # 上記の工夫で遅延はかなり減らせますが、完全に無くすことはできません。
   workflow_dispatch:
     # これがあると、GitHubの画面から「今すぐ手動で実行」できるようになります。
     # 最初の動作確認はこの手動実行を使います。
 
 # 状態ファイル(state/availability.json)をリポジトリにコミットし直すため、
 # 書き込み権限を許可します。
+# 実行が重なると保存データが壊れる原因になるため、
+# 「前の実行がまだ終わっていなければ、次の実行は順番待ちする」設定です。
+# （同時に2つ動くことは無くなり、必ず1つずつ順番に実行されます）
+concurrency:
+  group: nerima-availability-check
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -52,5 +62,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state debug
-          git diff --quiet --cached || git commit -m "空き状況チェック結果を更新 [skip ci]"
-          git push
+          if ! git diff --quiet --cached; then
+            git commit -m "空き状況チェック結果を更新 [skip ci]"
+            # 万が一リモートが少し進んでいた場合に備えて、
+            # 最新を取り込んでからpushする（3回までリトライ）
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push && break
+              echo "push失敗、再試行します ($i回目)"
+              sleep 5
+            done
+          else
+            echo "変更なし。コミットはスキップします。"
+          fi
