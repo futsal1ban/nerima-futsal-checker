@@ -12,13 +12,10 @@
 ・2回目以降の実行
     → 前回チェック時と比べて「新しく空きになった日」があるときだけLINEに送ります。
 
-【重要な注意】
-このサイトはJavaScriptで画面を作るタイプのサイト（SPA）なので、
-「日付の横にどんな記号（○/△/×など）でどう空き状況が書かれているか」を
-作者（Claude）は実際の画面で確認できていません。
-そのため、空き状況の読み取り（parse_calendar_text 関数）は「たぶんこうだろう」という
-推測で書いています。1回目の実行結果と、debug/ フォルダに保存されるスクリーンショット・
-テキストを見比べて、もし読み取りがおかしければ一緒に調整しましょう。
+【空き判定の仕組み】
+DevToolsで確認していただいた実際のHTML構造に基づき、
+<td id="YYYY/MM/DD">セル内に <span class="vacant">予約申込可能</span> が
+あるかどうかで判定しています（build_day_results 関数）。
 """
 
 import json
@@ -109,8 +106,8 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
     ・取得できた結果が本当に狙った施設のものか確認する（違えば作り直す）
     ・スクリーンショット(debug/xxx.png)
     ・画面のテキスト全部(debug/xxx.txt)
-    ・クリック可能と判定した日付一覧(debug/xxx_clickable.json)
-    を保存する。戻り値は (画面テキスト, クリック可能な日付の集合)。
+    ・その月の全日付と空き有無(debug/xxx_day_status.json)
+    を保存する。戻り値は {日にち(int): 空きあり(True)/なし(False)} の辞書。
 
     【背景】
     以前、同じ画面(page)を使い回して施設を連続して切り替えると、
@@ -145,91 +142,59 @@ def fetch_month(page, facility_id: int, facility_name: str, year_month: str, deb
     os.makedirs(DEBUG_DIR, exist_ok=True)
     screenshot_path = os.path.join(DEBUG_DIR, f"{debug_name}.png")
     text_path = os.path.join(DEBUG_DIR, f"{debug_name}.txt")
-    clickable_path = os.path.join(DEBUG_DIR, f"{debug_name}_clickable.json")
+    day_status_path = os.path.join(DEBUG_DIR, f"{debug_name}_day_status.json")
 
     page.screenshot(path=screenshot_path, full_page=True)
     with open(text_path, "w", encoding="utf-8") as f:
         f.write(body_text)
 
-    clickable_days = extract_clickable_days(page)
-    with open(clickable_path, "w", encoding="utf-8") as f:
-        json.dump(sorted(clickable_days), f, ensure_ascii=False)
+    day_status = get_calendar_day_status(page)
+    with open(day_status_path, "w", encoding="utf-8") as f:
+        json.dump({str(k): v for k, v in sorted(day_status.items())}, f, ensure_ascii=False, indent=2)
 
     # ★調査用★
-    # clickable_days が空だった場合、「予約申込可能」の文字を含む要素の
-    # 実際のHTML構造をファイルに保存しておく。これを見れば、
-    # どんなタグ・クラス名で空き日が作られているかが分かり、
-    # 検出ロジックを正確に直せるようになる。
-    if not clickable_days and "予約申込可能" in body_text:
+    # 1件も日付セルを検出できなかった場合（想定外のHTML構造だった場合）、
+    # 画面全体のHTMLを保存しておく。これを見れば正確な原因調査ができる。
+    if not day_status:
         html_debug_path = os.path.join(DEBUG_DIR, f"{debug_name}_html_sample.txt")
         try:
-            samples = page.evaluate(
-                """
-                () => {
-                  const results = [];
-                  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                  let node;
-                  let count = 0;
-                  while ((node = walker.nextNode()) && count < 5) {
-                    if (node.textContent.includes('予約申込可能')) {
-                      let el = node.parentElement;
-                      // 少し上の階層(日付を含みそうな祖先)まで遡ってHTMLを取得
-                      let ancestor = el;
-                      for (let i = 0; i < 3 && ancestor.parentElement; i++) {
-                        ancestor = ancestor.parentElement;
-                      }
-                      results.push(ancestor.outerHTML);
-                      count++;
-                    }
-                  }
-                  return results;
-                }
-                """
-            )
+            html = page.evaluate("() => document.getElementById('calendar')?.outerHTML || document.body.innerHTML")
             with open(html_debug_path, "w", encoding="utf-8") as f:
-                f.write("\n\n===== 次のサンプル =====\n\n".join(samples))
+                f.write(html[:20000])
         except Exception as e:
             print(f"[警告] HTML構造の調査保存に失敗しました: {e}")
 
-    return body_text, clickable_days
+    return day_status
 
 
 # ============================================================
-# 空き状況の読み取り（★ここが「推測」で書いている部分です★）
+# 空き状況の読み取り
 # ============================================================
-#
-# 教えていただいた仕様:
-#   ・空きがある日は「クリックできる表示」になっていて、
-#     クリックすると空き時間が表示される
-#   ・つまり「クリックできる要素になっているかどうか」＝「空きがあるかどうか」
-#
-# という前提で、記号（○×）を探すのではなく、
-# 「クリック可能な要素（リンク/ボタン）のうち、中身が日付の数字だけのもの」
-# を空きありの日として扱うロジックにしています。
-# ただし実際のHTML構造は見えていないため、これも推測です。
-# デバッグ用に「テキスト全体」と「クリック可能と判定した日付一覧」の両方を
-# 保存するので、初回実行後にズレがあれば教えてください。
+# DevToolsで確認していただいた実際のHTML構造(<td id="YYYY/MM/DD">の中に
+# <span class="vacant">予約申込可能</span>があるかどうか)に基づいて判定しています。
 
-DATE_TOKEN_PATTERN = re.compile(
-    r"(\d{1,2})\s*[\(（]\s*([月火水木金土日])\s*[\)）]"
-)
-
-
-def extract_clickable_days(page):
+def get_calendar_day_status(page):
     """
-    ページ内の各日付セル <td id="YYYY/MM/DD"> の中に
-    <span class="vacant">予約申込可能</span> があるかどうかを直接調べる。
+    ページ内の各日付セル <td id="YYYY/MM/DD"> をすべて調べ、
+    「その日が存在するか」「空き(<span class="vacant">)があるか」を一度に取得する。
     （＝実際にDevToolsで確認していただいたHTML構造に基づく、確実な判定方法）
+
+    戻り値: {日にち(int): True/False}
+        True  = その日に空きがある（<span class="vacant">が存在する）
+        False = その日は表示されているが空きがない
+    （out-of-month = 前後の月にはみ出た日付セルにはidが付かないため、
+      自動的にこの月の日付だけが対象になる）
     """
-    days = set()
     try:
-        id_list = page.evaluate(
+        raw = page.evaluate(
             """
             () => {
-              const out = [];
+              const out = {};
               document.querySelectorAll('td[id]').forEach(td => {
-                if (td.querySelector('span.vacant')) {
-                  out.push(td.id);  // 例: "2026/07/26"
+                const parts = td.id.split('/');
+                if (parts.length === 3) {
+                  const day = parseInt(parts[2], 10);
+                  out[day] = !!td.querySelector('span.vacant');
                 }
               });
               return out;
@@ -237,35 +202,10 @@ def extract_clickable_days(page):
             """
         )
     except Exception as e:
-        print(f"[警告] 空き日セルの検出に失敗しました: {e}")
-        return days
+        print(f"[警告] カレンダーセルの検出に失敗しました: {e}")
+        return {}
 
-    for id_str in id_list:
-        parts = id_str.split("/")
-        if len(parts) == 3:
-            try:
-                days.add(int(parts[2]))
-            except ValueError:
-                continue
-    return days
-    return days
-
-
-def list_all_calendar_days(body_text: str, year_month: str):
-    """
-    画面テキストの中から「◯(月火水木金土日)」形式の日付表記をすべて拾い、
-    その月に実在する日付だけを返す（＝カレンダーに表示されている日の一覧）。
-    """
-    year, month = map(int, year_month.split("/"))
-    all_days = set()
-    for m in DATE_TOKEN_PATTERN.finditer(body_text):
-        day = int(m.group(1))
-        try:
-            date(year, month, day)
-            all_days.add(day)
-        except ValueError:
-            continue
-    return sorted(all_days)
+    return {int(k): v for k, v in raw.items()}
 
 
 # 「21:00〜21:30」「21:00~21:30」「21:00-21:30」のような時間帯表記を探す
@@ -368,21 +308,20 @@ def refine_days_with_time_slot_filter(page, year: int, month: int, day_numbers):
     return result
 
 
-def parse_calendar_text(body_text: str, year_month: str, clickable_days: set, refined_days=None):
+def build_day_results(year_month: str, day_status: dict, refined_days=None):
     """
     「日付 → 状態」の辞書を作る。
-    ・クリックできない日        → 空きなし(推定)
-    ・クリックできる日で、詳細確認済み → 除外時間帯以外に空きがあれば「空きあり」、無ければ「空きなし(21時枠のみ)」
-    ・クリックできる日で、詳細未確認   → 「空きあり」（従来通り）
+    ・day_status で「空きなし(False)」だった日 → 空きなし(推定)
+    ・空きあり(True)で、時間帯詳細を確認できた日 → 除外時間帯以外に空きがあれば「空きあり」、無ければ「空きなし(21時枠のみ)」
+    ・空きあり(True)で、時間帯詳細を未確認の日   → 「空きあり」（従来通り。平日は詳細確認をしないためここに該当）
     """
     refined_days = refined_days or {}
     year, month = map(int, year_month.split("/"))
     results = {}
 
-    all_days = list_all_calendar_days(body_text, year_month)
-    for day in all_days:
+    for day, is_vacant in day_status.items():
         d = date(year, month, day)
-        if day not in clickable_days:
+        if not is_vacant:
             status = "空きなし(推定)"
         elif day in refined_days:
             status = "空きあり" if refined_days[day] else "空きなし(21時枠のみ)"
@@ -462,16 +401,16 @@ def main():
 
             for ym in year_months:
                 debug_name = f"{fkey}_{ym.replace('/', '-')}"
-                body_text, clickable_days = fetch_month(
+                day_status = fetch_month(
                     page, facility["facility_id"], facility["name"], ym, debug_name
                 )
                 year, month = map(int, ym.split("/"))
 
-                # 土日祝かつクリック可能（空きの可能性あり）な日だけ、
+                # 土日祝かつ空きの可能性がある日だけ、
                 # 時間帯の詳細まで確認しにいく（対象が少ないので現実的な処理時間で収まる）
                 target_days = {
-                    d for d in clickable_days
-                    if is_weekend_or_holiday(date(year, month, d))
+                    d for d, is_vacant in day_status.items()
+                    if is_vacant and is_weekend_or_holiday(date(year, month, d))
                 }
                 refined = refine_days_with_time_slot_filter(page, year, month, target_days)
 
@@ -480,7 +419,7 @@ def main():
                 with open(debug_slot_path, "w", encoding="utf-8") as f:
                     json.dump({str(k): v for k, v in refined.items()}, f, ensure_ascii=False, indent=2)
 
-                parsed = parse_calendar_text(body_text, ym, clickable_days, refined)
+                parsed = build_day_results(ym, day_status, refined)
 
                 for iso_date, status in parsed.items():
                     d = date.fromisoformat(iso_date)
