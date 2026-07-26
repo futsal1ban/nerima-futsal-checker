@@ -42,8 +42,8 @@ BASE_URL = "https://www.shisetsuyoyaku.city.nerima.tokyo.jp/reservation/search"
 
 # チェックしたい施設（facility_id は施設ごとに割り振られたID）
 FACILITIES = [
-    {"key": "sunlife", "name": "サンライフ練馬", "facility_id": 36},
-    {"key": "kasugacho", "name": "春日町青少年館", "facility_id": 201},
+    {"key": "sunlife", "name": "サンライフ練馬", "facility_id": 201},
+    {"key": "kasugacho", "name": "春日町青少年館", "facility_id": 36},
 ]
 
 # 今日から何か月分見るか
