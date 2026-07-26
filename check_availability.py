@@ -219,12 +219,19 @@ def normalize_time(t: str) -> str:
 
 def get_available_time_ranges(page):
     """
-    現在表示されている画面の中から「クリックできる時間帯」（＝空きのある時間帯）
-    をすべて取得する。日付をクリックして詳細（時間帯一覧）が表示された状態で呼び出す。
+    現在表示されているモーダル（日付クリック後に開く時間帯選択パネル）の中から、
+    空いている時間帯をすべて取得する。
+
+    実際のHTML構造（DevToolsで確認していただいたもの）:
+      <div class="modal_timelist1">
+        <label for="...">21:00〜21:30</label>
+      </div>
+    という形で、時間帯は<label>タグのテキストとして入っている。
+    （ボタンやリンクではないので、以前の検出方法では見つからなかった）
     """
     ranges = []
     try:
-        candidates = page.locator("a, button, [role='button']")
+        candidates = page.locator(".ant-modal-content .modal_timelist1 label")
         count = candidates.count()
     except Exception:
         return ranges
@@ -242,15 +249,21 @@ def get_available_time_ranges(page):
 
 def close_day_detail(page):
     """
-    日付をクリックして開いた時間帯の詳細パネル（モーダル等）を閉じる。
-    やり方が分からないため、いくつかの方法を順番に試す。
+    日付をクリックして開いた時間帯の詳細パネル（モーダル）を閉じる。
+    実際のHTML構造では、右上の「×」ボタン(aria-label="Close")と
+    下部の「キャンセルする」ボタンの両方が存在する。
     """
     try:
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
     except Exception:
         pass
-    for selector in ["button:has-text('閉じる')", "[aria-label*='閉じる']", "button:has-text('×')"]:
+    for selector in [
+        "button[aria-label='Close']",
+        "button:has-text('キャンセルする')",
+        "button:has-text('閉じる')",
+        "button:has-text('×')",
+    ]:
         try:
             el = page.locator(selector).first
             if el.count() > 0:
