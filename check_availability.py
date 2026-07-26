@@ -281,19 +281,38 @@ def refine_days_with_time_slot_filter(page, year: int, month: int, day_numbers):
         try:
             day_locator = page.locator(f'td[id="{date_id}"] span.vacant').first
             day_locator.click(timeout=5000)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2500)  # モーダルのアニメーション等を考慮して少し長めに待つ
 
             ranges = get_available_time_ranges(page)
 
             # ★調査用★ 時間帯が1件も取れなかった場合、最初の1回だけ
-            # クリック後の画面全体のHTMLをデバッグ保存しておく（原因調査用）
+            # ポップアップ(モーダル/ドロワー)部分のHTMLをデバッグ保存しておく（原因調査用）。
+            # このサイトはAnt Designという部品を使っており、
+            # ポップアップの中身は画面の見た目とは離れた場所(bodyの末尾付近)に
+            # 追加されることが多いため、それらしき要素を優先して探す。
             if not ranges and not debug_html_saved:
                 debug_html_saved = True
                 try:
-                    html = page.evaluate("() => document.body.innerHTML")
+                    html = page.evaluate(
+                        """
+                        () => {
+                          const selectors = [
+                            '.ant-modal-content', '.ant-drawer-content',
+                            '.ant-modal-body', '.ant-drawer-body',
+                            '[class*="modal"]', '[class*="drawer"]', '[class*="popup"]'
+                          ];
+                          for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (el) return `[${sel} で発見]\\n` + el.outerHTML;
+                          }
+                          return '[それらしき要素が見つからなかったため、body全体の末尾3万文字]\\n'
+                            + document.body.innerHTML.slice(-30000);
+                        }
+                        """
+                    )
                     path = os.path.join(DEBUG_DIR, f"slot_detail_html_sample_{year}-{month:02d}-{day:02d}.txt")
                     with open(path, "w", encoding="utf-8") as f:
-                        f.write(html[:20000])  # 長すぎる場合に備えて先頭2万文字まで
+                        f.write(html[:30000])
                 except Exception as e:
                     print(f"[警告] 時間帯詳細のHTML保存に失敗しました: {e}")
 
