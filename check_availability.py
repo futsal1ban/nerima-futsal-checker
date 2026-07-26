@@ -102,27 +102,45 @@ def build_url(facility_id: int, year_month: str) -> str:
     )
 
 
-def fetch_month(page, facility_id: int, year_month: str, debug_name: str):
+def fetch_month(page, facility_id: int, facility_name: str, year_month: str, debug_name: str):
     """
     指定した施設・月のページを開いて、
     ・「検索する」ボタンをクリックして実際の空き状況を表示させる
+    ・取得できた結果が本当に狙った施設のものか確認する（違えば作り直す）
     ・スクリーンショット(debug/xxx.png)
     ・画面のテキスト全部(debug/xxx.txt)
     ・クリック可能と判定した日付一覧(debug/xxx_clickable.json)
     を保存する。戻り値は (画面テキスト, クリック可能な日付の集合)。
+
+    【背景】
+    以前、同じ画面(page)を使い回して施設を連続して切り替えると、
+    サイト側の内部状態が前の施設のまま残ってしまい、
+    「春日町のはずがサンライフ練馬の結果が返ってくる」ことがありました。
+    そのため、ここで「本当にその施設の結果になっているか」を毎回確認しています。
     """
     url = build_url(facility_id, year_month)
-    page.goto(url, wait_until="networkidle", timeout=45000)
-    page.wait_for_timeout(1500)
 
-    # URLのパラメータだけでは検索結果(カレンダー)が表示されず、
-    # 画面上の「検索する」ボタンを押して初めて空き状況が表示される仕様のため、
-    # ボタンを探してクリックする。
-    try:
-        page.get_by_text("検索する", exact=True).click(timeout=10000)
-        page.wait_for_timeout(3000)
-    except Exception as e:
-        print(f"[警告] 「検索する」ボタンのクリックに失敗しました: {e}")
+    for attempt in range(1, 4):  # 最大3回まで試す
+        page.goto(url, wait_until="networkidle", timeout=45000)
+        page.wait_for_timeout(1500)
+
+        try:
+            page.get_by_text("検索する", exact=True).click(timeout=10000)
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            print(f"[警告] 「検索する」ボタンのクリックに失敗しました: {e}")
+
+        body_text = page.inner_text("body")
+
+        # 表示された「現在の検索条件」に、狙った施設名が含まれているか確認する
+        if facility_name in body_text:
+            break
+        print(
+            f"[警告] {attempt}回目: 期待した施設「{facility_name}」と異なる結果が"
+            f"表示されたため、ページを開き直します。"
+        )
+    else:
+        print(f"[エラー] {facility_name} {year_month}: 3回試しても正しい施設の結果を取得できませんでした。")
 
     os.makedirs(DEBUG_DIR, exist_ok=True)
     screenshot_path = os.path.join(DEBUG_DIR, f"{debug_name}.png")
@@ -130,7 +148,6 @@ def fetch_month(page, facility_id: int, year_month: str, debug_name: str):
     clickable_path = os.path.join(DEBUG_DIR, f"{debug_name}_clickable.json")
 
     page.screenshot(path=screenshot_path, full_page=True)
-    body_text = page.inner_text("body")
     with open(text_path, "w", encoding="utf-8") as f:
         f.write(body_text)
 
@@ -369,16 +386,20 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
 
         for facility in FACILITIES:
             fkey = facility["key"]
             current_state[fkey] = {}
 
+            # 施設が変わるたびに、まっさらな状態のブラウザ画面を新しく開く。
+            # (前の施設の情報が残ったまま次の施設を検索してしまうバグの対策)
+            context = browser.new_context()
+            page = context.new_page()
+
             for ym in year_months:
                 debug_name = f"{fkey}_{ym.replace('/', '-')}"
                 body_text, clickable_days = fetch_month(
-                    page, facility["facility_id"], ym, debug_name
+                    page, facility["facility_id"], facility["name"], ym, debug_name
                 )
                 year, month = map(int, ym.split("/"))
 
@@ -401,6 +422,8 @@ def main():
                     d = date.fromisoformat(iso_date)
                     if is_weekend_or_holiday(d):
                         current_state[fkey][iso_date] = status
+
+            context.close()  # この施設の確認が終わったら画面を閉じる（次の施設はまっさらな画面で開始）
 
         browser.close()
 
