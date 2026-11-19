@@ -9,7 +9,7 @@
   "8": true,
   "9": true,
   "10": true,
-  "11": true,
+  "11": false,
   "12": false,
   "13": true,
   "14": true,
@@ -26,5 +26,5 @@
   "25": false,
   "26": true,
   "27": true,
-  "28": true
+  "28": false
 }
